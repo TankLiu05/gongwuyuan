@@ -1,0 +1,7 @@
+.env
+data/
+exports/
+study/data/
+study/exports/
+__pycache__/
+.DS_Store
