@@ -13,9 +13,17 @@ const EXPORT_DIR = path.join(ROOT, "exports");
 const DB_PATH = path.join(DATA_DIR, "study.sqlite");
 const PARSER_PATH = path.join(ROOT, "scripts", "parse_docx.py");
 const PYTHON = process.env.PYTHON || "python3";
+const {
+  parseDailyDigest,
+  digestFilename,
+  toKnowledgeItems
+} = require("./scripts/parse_daily_digest");
+const { writeImportSqlFile } = require("./scripts/write_import_sql");
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 fs.mkdirSync(EXPORT_DIR, { recursive: true });
+const SQL_IMPORT_DIR = path.join(ROOT, "sql", "imports");
+fs.mkdirSync(SQL_IMPORT_DIR, { recursive: true });
 
 const env = {
   ...loadEnv(path.join(CONTENT_ROOT, ".env")),
@@ -130,10 +138,41 @@ db.exec(`
     title TEXT NOT NULL,
     body TEXT NOT NULL,
     tags TEXT NOT NULL DEFAULT '',
+    memory_status TEXT NOT NULL DEFAULT 'learning',
+    last_reviewed_at TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(document_id) REFERENCES source_documents(id) ON DELETE CASCADE
   );
+`);
 
+ensureColumn("knowledge_items", "memory_status", "TEXT NOT NULL DEFAULT 'learning'");
+ensureColumn("knowledge_items", "last_reviewed_at", "TEXT NOT NULL DEFAULT ''");
+ensureColumn("knowledge_items", "topic", "TEXT NOT NULL DEFAULT ''");
+ensureColumn("knowledge_items", "kind", "TEXT NOT NULL DEFAULT ''");
+ensureColumn("knowledge_items", "fingerprint", "TEXT NOT NULL DEFAULT ''");
+ensureColumn("practice_questions", "doc_date", "TEXT NOT NULL DEFAULT ''");
+ensureColumn("practice_questions", "user_answer", "TEXT NOT NULL DEFAULT ''");
+ensureColumn("practice_questions", "answer_status", "TEXT NOT NULL DEFAULT ''");
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS content_kinds_meta (
+    kind TEXT PRIMARY KEY,
+    label TEXT NOT NULL,
+    tab TEXT NOT NULL DEFAULT 'memory'
+  );
+  INSERT OR IGNORE INTO content_kinds_meta (kind, label, tab) VALUES
+    ('material', '时政材料', 'materials'),
+    ('question', '题目', 'questions'),
+    ('history', '历史上的今天', 'memory'),
+    ('common', '常识', 'memory'),
+    ('term', '词语', 'idioms'),
+    ('idiom', '成语', 'idioms'),
+    ('award', '颁奖辞', 'memory'),
+    ('extension', '拓展', 'memory'),
+    ('quote', '金句', 'memory');
+`);
+
+db.exec(`
   CREATE TABLE IF NOT EXISTS shenlun_reviews (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     question_type TEXT NOT NULL DEFAULT '',
@@ -190,7 +229,7 @@ server.on("error", error => {
 server.listen(PORT, "127.0.0.1", () => {
   const url = `http://127.0.0.1:${PORT}`;
   console.log(`公考学习追踪已启动: ${url}`);
-  if (process.argv.includes("--open")) exec(`open "${url}"`);
+  if (process.argv.includes("--open")) openBrowser(url);
 });
 
 async function handleApi(req, res, url) {
@@ -202,6 +241,49 @@ async function handleApi(req, res, url) {
   if (method === "GET" && url.pathname === "/api/questions") return sendJson(res, 200, { questions: getQuestions() });
   if (method === "GET" && url.pathname === "/api/knowledge") return sendJson(res, 200, { knowledge: getKnowledge() });
   if (method === "GET" && url.pathname === "/api/chat/sessions") return sendJson(res, 200, { sessions: getChatSessions() });
+
+  const knowledgeMatch = url.pathname.match(/^\/api\/knowledge\/(\d+)$/);
+  if (method === "PATCH" && knowledgeMatch) {
+    const body = await readJson(req);
+    const status = toText(body.memory_status);
+    if (!["learning", "mastered"].includes(status)) throw httpError("memory_status 只能是 learning 或 mastered", 400);
+    db.prepare(`
+      UPDATE knowledge_items
+      SET memory_status = ?, last_reviewed_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(status, Number(knowledgeMatch[1]));
+    return sendJson(res, 200, { knowledge: getKnowledge() });
+  }
+
+  const questionMatch = url.pathname.match(/^\/api\/questions\/(\d+)\/answer$/);
+  if (method === "POST" && questionMatch) {
+    const body = await readJson(req);
+    const userAnswer = toText(body.answer).toUpperCase();
+    const row = db.prepare("SELECT id, answer FROM practice_questions WHERE id = ?").get(Number(questionMatch[1]));
+    if (!row) throw httpError("题目不存在", 404);
+    const correct = toText(row.answer).toUpperCase();
+    const answerStatus = !correct ? "unknown" : userAnswer === correct ? "correct" : "wrong";
+    db.prepare(`
+      UPDATE practice_questions
+      SET user_answer = ?, answer_status = ?
+      WHERE id = ?
+    `).run(userAnswer, answerStatus, row.id);
+    return sendJson(res, 200, { questions: getQuestions(), result: { answer_status: answerStatus, correct_answer: correct } });
+  }
+
+  if (method === "POST" && url.pathname === "/api/documents/reparse-all") {
+    const files = listExistingDocx();
+    const results = [];
+    for (const item of files) {
+      try {
+        const imported = await importDocument(path.join(CONTENT_ROOT, item.filename), { skipAi: true });
+        results.push({ filename: item.filename, ok: true, summary: imported.summary });
+      } catch (error) {
+        results.push({ filename: item.filename, ok: false, error: error.message });
+      }
+    }
+    return sendJson(res, 200, { reparsed: results.length, results, state: getState() });
+  }
 
   if (method === "POST" && url.pathname === "/api/daily-log") {
     const body = await readJson(req);
@@ -309,6 +391,21 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, { imported, ...getDocumentsState() });
   }
 
+  if (method === "POST" && url.pathname === "/api/daily-digest/preview") {
+    const body = await readJson(req);
+    const parsed = parseDailyDigest(body.text, body.answer_text, body.doc_date);
+    return sendJson(res, 200, {
+      parsed,
+      summary: summarizeDailyDigest(parsed)
+    });
+  }
+
+  if (method === "POST" && url.pathname === "/api/daily-digest/import") {
+    const body = await readJson(req);
+    const result = importDailyDigest(body);
+    return sendJson(res, 200, result);
+  }
+
   if (method === "POST" && url.pathname === "/api/ai/review") {
     const state = getState();
     const prompt = buildAiPrompt(state);
@@ -378,7 +475,7 @@ async function importExistingDocument(filename) {
   return importDocument(fullPath);
 }
 
-async function importDocument(fullPath) {
+async function importDocument(fullPath, options = {}) {
   const filename = path.basename(fullPath);
   const stat = fs.statSync(fullPath);
   const hash = crypto.createHash("sha256").update(fs.readFileSync(fullPath)).digest("hex");
@@ -397,8 +494,10 @@ async function importDocument(fullPath) {
     knowledge: parsed.knowledge?.length || 0,
     warnings: parsed.warnings || []
   };
-  const aiValidation = await validateParsedDocument(parsed).catch(error => `AI 校验跳过：${error.message}`);
-  const docId = replaceDocumentRows({
+  const aiValidation = options.skipAi
+    ? `本地规则重解析完成${(parsed.warnings || []).length ? `；提示：${parsed.warnings.join("；")}` : ""}`
+    : await validateParsedDocument(parsed).catch(error => `AI 校验跳过：${error.message}`);
+  const replaced = replaceDocumentRows({
     filename,
     fullPath,
     docDate: parsed.doc_date || dateFromFilename(filename) || formatDate(stat.mtime),
@@ -408,11 +507,46 @@ async function importDocument(fullPath) {
     parsed
   });
   scanCurrentAffairsDocs();
-  return { id: docId, filename, doc_date: parsed.doc_date || dateFromFilename(filename) || formatDate(stat.mtime), summary, ai_validation: aiValidation };
+  const docDate = parsed.doc_date || dateFromFilename(filename) || formatDate(stat.mtime);
+  return {
+    id: replaced.id,
+    filename,
+    doc_date: docDate,
+    summary,
+    ai_validation: aiValidation,
+    sql_path: replaced.sql_path
+  };
+}
+
+function knowledgeFingerprint(item) {
+  if (item.fingerprint) return toText(item.fingerprint);
+  return `${toText(item.category)}|${toText(item.topic)}|${toText(item.title)}|${toText(item.body).slice(0, 80)}`;
 }
 
 function replaceDocumentRows({ filename, fullPath, docDate, hash, summary, aiValidation, parsed }) {
   let doc = db.prepare("SELECT id FROM source_documents WHERE filename = ?").get(filename);
+  const priorMemory = new Map();
+  if (doc) {
+    for (const row of db.prepare(`
+      SELECT fingerprint, category, title, body, memory_status, last_reviewed_at
+      FROM knowledge_items WHERE document_id = ?
+    `).all(doc.id)) {
+      const keys = [
+        toText(row.fingerprint),
+        `${toText(row.category)}|${toText(row.title)}`,
+        `${toText(row.category)}|${toText(row.title)}|${toText(row.body).slice(0, 80)}`
+      ].filter(Boolean);
+      for (const key of keys) {
+        if (!priorMemory.has(key)) {
+          priorMemory.set(key, {
+            memory_status: row.memory_status || "learning",
+            last_reviewed_at: row.last_reviewed_at || ""
+          });
+        }
+      }
+    }
+  }
+
   if (!doc) {
     const result = db.prepare(`
       INSERT INTO source_documents
@@ -437,36 +571,276 @@ function replaceDocumentRows({ filename, fullPath, docDate, hash, summary, aiVal
     INSERT INTO affairs_articles (document_id, article_order, title, body, source, doc_date, tags)
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `);
+  const articlesForSql = [];
   for (const item of parsed.articles || []) {
-    articleStmt.run(doc.id, toInt(item.order), toText(item.title), toText(item.body), toText(item.source), docDate, toText(item.tags));
+    const row = {
+      order: toInt(item.order),
+      title: toText(item.title),
+      body: toText(item.body),
+      source: toText(item.source),
+      tags: toText(item.tags)
+    };
+    articleStmt.run(doc.id, row.order, row.title, row.body, row.source, docDate, row.tags);
+    articlesForSql.push(row);
   }
 
   const questionStmt = db.prepare(`
     INSERT INTO practice_questions
-      (document_id, question_order, source_type, question_type, prompt, options_json, answer, explanation, tags)
-    VALUES (?, ?, 'document', ?, ?, ?, ?, ?, ?)
+      (document_id, question_order, source_type, question_type, prompt, options_json, answer, explanation, tags, doc_date)
+    VALUES (?, ?, 'document', ?, ?, ?, ?, ?, ?, ?)
   `);
+  const questionsForSql = [];
   for (const item of parsed.questions || []) {
+    const row = {
+      order: toInt(item.order),
+      question_type: toText(item.question_type) || "单选",
+      prompt: toText(item.prompt),
+      options: item.options || [],
+      answer: toText(item.answer),
+      explanation: toText(item.explanation),
+      tags: toText(item.tags)
+    };
     questionStmt.run(
       doc.id,
-      toInt(item.order),
-      toText(item.question_type) || "单选",
-      toText(item.prompt),
-      JSON.stringify(item.options || []),
-      toText(item.answer),
-      toText(item.explanation),
-      toText(item.tags)
+      row.order,
+      row.question_type,
+      row.prompt,
+      JSON.stringify(row.options),
+      row.answer,
+      row.explanation,
+      row.tags,
+      docDate
     );
+    questionsForSql.push(row);
   }
 
   const knowledgeStmt = db.prepare(`
-    INSERT INTO knowledge_items (document_id, item_order, category, title, body, tags)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO knowledge_items
+      (document_id, item_order, category, title, body, tags, topic, kind, fingerprint, memory_status, last_reviewed_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
+  const knowledgeForSql = [];
   for (const item of parsed.knowledge || []) {
-    knowledgeStmt.run(doc.id, toInt(item.order), toText(item.category), toText(item.title), toText(item.body), toText(item.tags));
+    const fingerprint = knowledgeFingerprint(item);
+    const prior = priorMemory.get(fingerprint)
+      || priorMemory.get(`${toText(item.category)}|${toText(item.title)}`)
+      || { memory_status: "learning", last_reviewed_at: "" };
+    const row = {
+      order: toInt(item.order),
+      category: toText(item.category),
+      title: toText(item.title),
+      body: toText(item.body),
+      tags: toText(item.tags),
+      topic: toText(item.topic),
+      kind: toText(item.kind),
+      fingerprint,
+      memory_status: prior.memory_status,
+      last_reviewed_at: prior.last_reviewed_at
+    };
+    knowledgeStmt.run(
+      doc.id,
+      row.order,
+      row.category,
+      row.title,
+      row.body,
+      row.tags,
+      row.topic,
+      row.kind,
+      row.fingerprint,
+      row.memory_status,
+      row.last_reviewed_at
+    );
+    knowledgeForSql.push(row);
   }
-  return doc.id;
+
+  const sqlPath = writeImportSqlFile(SQL_IMPORT_DIR, {
+    kind: "docx",
+    filename,
+    fullPath,
+    docDate,
+    hash,
+    summary,
+    aiValidation,
+    articles: articlesForSql,
+    questions: questionsForSql,
+    knowledge: knowledgeForSql,
+    questionSourceType: "document",
+    clearQuestionsAll: false
+  });
+  doc.sql_path = path.relative(ROOT, sqlPath);
+  return { id: doc.id, sql_path: doc.sql_path };
+}
+
+function summarizeDailyDigest(parsed) {
+  return {
+    idioms: parsed.idioms?.length || 0,
+    quotes: parsed.quotes?.length || 0,
+    questions: parsed.questions?.length || 0,
+    warnings: parsed.warnings || []
+  };
+}
+
+function importDailyDigest(body) {
+  const text = requiredText(body.text, "请粘贴每日积累正文");
+  const answerText = toText(body.answer_text);
+  const parsed = parseDailyDigest(text, answerText, body.doc_date);
+  const docDate = requireDate(parsed.doc_date || body.doc_date);
+  parsed.doc_date = docDate;
+
+  const knowledge = toKnowledgeItems(parsed);
+  const questions = parsed.questions || [];
+  if (!knowledge.length && !questions.length) {
+    throw httpError(`未能解析出可写入内容${parsed.warnings?.length ? `：${parsed.warnings.join("；")}` : ""}`, 422);
+  }
+
+  const filename = digestFilename(docDate);
+  const fullPath = `manual://${filename}`;
+  const hash = crypto.createHash("sha256").update(`${docDate}\n${text}\n${answerText}`).digest("hex");
+  const summary = {
+    source: "daily-digest",
+    ...summarizeDailyDigest(parsed),
+    knowledge: knowledge.length
+  };
+
+  let doc = db.prepare("SELECT id FROM source_documents WHERE filename = ?").get(filename);
+  const priorMemory = new Map();
+  if (doc) {
+    for (const row of db.prepare(`
+      SELECT fingerprint, category, title, body, memory_status, last_reviewed_at
+      FROM knowledge_items WHERE document_id = ?
+    `).all(doc.id)) {
+      const keys = [
+        toText(row.fingerprint),
+        `${toText(row.category)}|${toText(row.title)}`,
+        `${toText(row.category)}|${toText(row.title)}|${toText(row.body).slice(0, 80)}`
+      ].filter(Boolean);
+      for (const key of keys) {
+        if (!priorMemory.has(key)) {
+          priorMemory.set(key, {
+            memory_status: row.memory_status || "learning",
+            last_reviewed_at: row.last_reviewed_at || ""
+          });
+        }
+      }
+    }
+  }
+
+  if (!doc) {
+    const result = db.prepare(`
+      INSERT INTO source_documents
+        (filename, file_path, doc_date, file_hash, status, parse_summary, ai_validation, updated_at)
+      VALUES (?, ?, ?, ?, 'imported', ?, ?, CURRENT_TIMESTAMP)
+    `).run(filename, fullPath, docDate, hash, JSON.stringify(summary), "每日积累手工写入");
+    doc = { id: Number(result.lastInsertRowid) };
+  } else {
+    db.prepare("DELETE FROM practice_questions WHERE document_id = ?").run(doc.id);
+    db.prepare("DELETE FROM knowledge_items WHERE document_id = ?").run(doc.id);
+    db.prepare(`
+      UPDATE source_documents SET
+        file_path = ?, doc_date = ?, file_hash = ?, status = 'imported',
+        parse_summary = ?, ai_validation = ?, error_message = '',
+        imported_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(fullPath, docDate, hash, JSON.stringify(summary), "每日积累手工写入", doc.id);
+  }
+
+  const knowledgeStmt = db.prepare(`
+    INSERT INTO knowledge_items
+      (document_id, item_order, category, title, body, tags, topic, kind, fingerprint, memory_status, last_reviewed_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  const knowledgeForSql = [];
+  for (const item of knowledge) {
+    const fingerprint = knowledgeFingerprint(item);
+    const prior = priorMemory.get(fingerprint)
+      || priorMemory.get(`${toText(item.category)}|${toText(item.title)}`)
+      || { memory_status: "learning", last_reviewed_at: "" };
+    const row = {
+      order: toInt(item.order),
+      category: toText(item.category),
+      title: toText(item.title),
+      body: toText(item.body),
+      tags: toText(item.tags),
+      topic: toText(item.topic),
+      kind: toText(item.kind),
+      fingerprint,
+      memory_status: prior.memory_status,
+      last_reviewed_at: prior.last_reviewed_at
+    };
+    knowledgeStmt.run(
+      doc.id,
+      row.order,
+      row.category,
+      row.title,
+      row.body,
+      row.tags,
+      row.topic,
+      row.kind,
+      row.fingerprint,
+      row.memory_status,
+      row.last_reviewed_at
+    );
+    knowledgeForSql.push(row);
+  }
+
+  const questionStmt = db.prepare(`
+    INSERT INTO practice_questions
+      (document_id, question_order, source_type, question_type, prompt, options_json, answer, explanation, tags, doc_date)
+    VALUES (?, ?, 'digest', ?, ?, ?, ?, ?, ?, ?)
+  `);
+  const questionsForSql = [];
+  questions.forEach((item, index) => {
+    const row = {
+      order: index + 1,
+      question_type: toText(item.question_type) || "单选",
+      prompt: toText(item.prompt),
+      options: item.options || [],
+      answer: toText(item.answer),
+      explanation: toText(item.explanation),
+      tags: toText(item.tags) || "常识判断"
+    };
+    questionStmt.run(
+      doc.id,
+      row.order,
+      row.question_type,
+      row.prompt,
+      JSON.stringify(row.options),
+      row.answer,
+      row.explanation,
+      row.tags,
+      docDate
+    );
+    questionsForSql.push(row);
+  });
+
+  const sqlPath = writeImportSqlFile(SQL_IMPORT_DIR, {
+    kind: "daily-digest",
+    filename,
+    fullPath,
+    docDate,
+    hash,
+    summary,
+    aiValidation: "每日积累手工写入",
+    articles: [],
+    questions: questionsForSql,
+    knowledge: knowledgeForSql,
+    questionSourceType: "digest",
+    clearQuestionsAll: true
+  });
+
+  return {
+    filename,
+    doc_date: docDate,
+    summary,
+    sql_path: path.relative(ROOT, sqlPath),
+    parsed: {
+      idioms: parsed.idioms,
+      quotes: parsed.quotes,
+      questions: parsed.questions,
+      warnings: parsed.warnings
+    },
+    state: getState()
+  };
 }
 
 function upsertFailedDocument(filename, fullPath, hash, message) {
@@ -547,8 +921,8 @@ async function generateAiQuestions(body) {
   const generated = parseJsonArrayFromText(content);
   const stmt = db.prepare(`
     INSERT INTO practice_questions
-      (document_id, question_order, source_type, question_type, prompt, options_json, answer, explanation, tags)
-    VALUES (?, ?, 'ai_generated', ?, ?, ?, ?, ?, ?)
+      (document_id, question_order, source_type, question_type, prompt, options_json, answer, explanation, tags, doc_date)
+    VALUES (?, ?, 'ai_generated', ?, ?, ?, ?, ?, ?, ?)
   `);
   generated.forEach((item, index) => {
     stmt.run(
@@ -559,7 +933,8 @@ async function generateAiQuestions(body) {
       JSON.stringify(Array.isArray(item.options) ? item.options : []),
       toText(item.answer),
       toText(item.explanation),
-      Array.isArray(item.tags) ? item.tags.join(",") : toText(item.tags)
+      Array.isArray(item.tags) ? item.tags.join(",") : toText(item.tags),
+      docDate || (articles[0]?.doc_date || "")
     );
   });
   return { generated_count: generated.length, questions: getQuestions() };
@@ -718,6 +1093,28 @@ function buildStats(dailyLogs, wrongQuestions, currentAffairsDocs, extra) {
   }
   for (const question of wrongQuestions) moduleWrong.set(question.module, (moduleWrong.get(question.module) || 0) + 1);
   const weakest = [...moduleWrong.entries()].sort((a, b) => b[1] - a[1])[0];
+
+  const answered = extra.questions.filter(q => q.answer_status === "correct" || q.answer_status === "wrong");
+  const quizCorrect = answered.filter(q => q.answer_status === "correct").length;
+  const masteryTotal = extra.knowledge.length;
+  const masteryDone = extra.knowledge.filter(item => item.memory_status === "mastered").length;
+  const byCategory = {};
+  for (const item of extra.knowledge) {
+    const key = item.category || "其他";
+    byCategory[key] = (byCategory[key] || 0) + 1;
+  }
+  const dates = [...new Set(extra.documents.map(doc => doc.doc_date).filter(Boolean))].sort();
+  const recentDates = dates.slice(-14);
+  const volumeByDate = recentDates.map(date => {
+    const docIds = new Set(extra.documents.filter(doc => doc.doc_date === date).map(doc => doc.id));
+    return {
+      date,
+      materials: extra.materials.filter(item => docIds.has(item.document_id)).length,
+      questions: extra.questions.filter(item => docIds.has(item.document_id)).length,
+      knowledge: extra.knowledge.filter(item => docIds.has(item.document_id)).length
+    };
+  });
+
   return {
     streak_days: calculateStreak(dailyLogs),
     seven_day_accuracy: correct + wrong > 0 ? Math.round((correct / (correct + wrong)) * 100) : null,
@@ -728,9 +1125,29 @@ function buildStats(dailyLogs, wrongQuestions, currentAffairsDocs, extra) {
     material_count: extra.materials.length,
     question_count: extra.questions.length,
     knowledge_count: extra.knowledge.length,
+    idiom_count: extra.knowledge.filter(isIdiomItem).length,
+    common_sense_count: extra.knowledge.filter(isMemoryItem).length,
+    memory_learning_count: extra.knowledge.filter(item => isMemoryItem(item) && item.memory_status !== "mastered").length,
+    memory_mastered_count: masteryDone,
+    mastery_rate: masteryTotal ? Math.round((masteryDone / masteryTotal) * 100) : 0,
+    quiz_answered: answered.length,
+    quiz_accuracy: answered.length ? Math.round((quizCorrect / answered.length) * 100) : null,
+    knowledge_by_category: byCategory,
+    volume_by_date: volumeByDate,
     shenlun_review_count: extra.shenlunReviews.length,
     today
   };
+}
+
+function isIdiomItem(item) {
+  const cat = String(item.category || "").trim();
+  const kind = String(item.kind || "").trim();
+  if (kind === "idiom" || kind === "term") return true;
+  return cat === "成语" || cat === "词语" || cat === "辨析";
+}
+
+function isMemoryItem(item) {
+  return !isIdiomItem(item);
 }
 
 function scanCurrentAffairsDocs() {
@@ -1104,4 +1521,18 @@ function httpError(message, status) {
   const error = new Error(message);
   error.status = status;
   return error;
+}
+
+function ensureColumn(table, column, definition) {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all().map(row => row.name);
+  if (!columns.includes(column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+}
+
+function openBrowser(url) {
+  const platform = process.platform;
+  if (platform === "darwin") exec(`open "${url}"`);
+  else if (platform === "win32") exec(`cmd /c start "" "${url}"`);
+  else exec(`xdg-open "${url}"`);
 }

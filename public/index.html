@@ -3,57 +3,163 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>公考学习追踪</title>
+    <title>学习追踪</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/styles.css">
   </head>
-  <body>
+  <body class="app-shell">
+    <div class="page-bg" aria-hidden="true"></div>
     <header class="topbar">
-      <div>
-        <h1>公考学习追踪</h1>
-        <p>每日时政资料库、题库、申论批改和本地学习记录</p>
+      <div class="brand">
+        <h1>学习追踪</h1>
       </div>
-      <div class="topbar-actions">
-        <button id="aiReviewButton" class="primary">AI 复盘</button>
-        <a class="button" href="/api/export/json">导出 JSON</a>
-        <a class="button" href="/api/export/csv">导出 CSV</a>
-      </div>
+      <div class="topbar-side" id="topbarSummary"></div>
     </header>
 
     <main>
-      <section class="stats-grid" aria-label="数据看板">
-        <article class="metric"><span>已导入文档</span><strong id="docCount">0</strong></article>
-        <article class="metric"><span>材料</span><strong id="materialCount">0</strong></article>
-        <article class="metric"><span>题目</span><strong id="questionCount">0</strong></article>
-        <article class="metric"><span>常识/成语</span><strong id="knowledgeCount">0</strong></article>
-        <article class="metric"><span>申论批改</span><strong id="shenlunCount">0</strong></article>
-      </section>
-
       <section class="date-filter" aria-label="按日期查询">
         <div>
-          <span>当前日期</span>
+          <span>当前学习日</span>
           <strong id="selectedDateLabel">暂无资料</strong>
         </div>
         <div class="date-controls">
+          <select id="viewScopeSelect" aria-label="查看范围">
+            <option value="day">仅当天</option>
+            <option value="all">全部信息</option>
+          </select>
           <button id="prevDateButton" type="button">上一天</button>
           <select id="dateSelect" aria-label="选择资料日期"></select>
           <button id="nextDateButton" type="button">下一天</button>
-          <button id="latestDateButton" type="button">最新</button>
+          <button id="latestDateButton" type="button" class="primary">最新</button>
         </div>
       </section>
 
       <section class="workspace">
         <nav class="tabs" aria-label="功能切换">
-          <button class="tab active" data-tab="import">资料导入</button>
-          <button class="tab" data-tab="library">资料库</button>
-          <button class="tab" data-tab="questions">题库</button>
-          <button class="tab" data-tab="shenlun">申论批改</button>
-          <button class="tab" data-tab="chat">AI 对话</button>
-          <button class="tab" data-tab="daily">今日打卡</button>
-          <button class="tab" data-tab="wrong">错题本</button>
-          <button class="tab" data-tab="review">AI 复盘</button>
+          <button class="tab active" data-tab="today">仪表盘</button>
+          <button class="tab" data-tab="materials">时政材料</button>
+          <button class="tab" data-tab="questions">题目</button>
+          <button class="tab" data-tab="idioms">成语</button>
+          <button class="tab" data-tab="memory">常识记忆</button>
+          <button class="tab" data-tab="chat">问 AI</button>
+          <button class="tab" data-tab="import">导入</button>
         </nav>
 
-        <section id="import" class="panel active">
+        <section id="today" class="panel active">
+          <div class="panel-toolbar">
+            <div>
+              <h2>今日仪表盘</h2>
+              <p id="todayScopeText">当日拆分结果、掌握进度与近两周体量。</p>
+            </div>
+          </div>
+          <div class="dashboard" id="dashboardRoot"></div>
+        </section>
+
+        <section id="materials" class="panel">
+          <div class="panel-toolbar">
+            <div>
+              <h2>时政材料</h2>
+              <p id="materialsScopeText">只看当天 Word 里的时政热点材料。</p>
+            </div>
+            <input id="materialsSearch" class="search-input" placeholder="搜索标题、正文、来源">
+          </div>
+          <div id="materialsList" class="card-list"></div>
+        </section>
+
+        <section id="questions" class="panel">
+          <div class="panel-toolbar">
+            <div>
+              <h2>题目</h2>
+              <p id="questionScopeText">查看当天原题，也可基于当天材料生成选择题。</p>
+            </div>
+            <div class="toolbar-actions">
+              <select id="generateDocSelect" aria-label="选择出题文档"></select>
+              <button id="generateQuestionsButton" class="primary">生成选择题</button>
+            </div>
+          </div>
+          <div id="questionsList" class="card-list"></div>
+        </section>
+
+        <section id="idioms" class="panel">
+          <div class="panel-toolbar">
+            <div>
+              <h2>成语</h2>
+              <p id="idiomsScopeText">显示成语 / 词语条目（含每日积累写入），与常识分开。</p>
+            </div>
+            <input id="idiomsSearch" class="search-input" placeholder="搜索成语、释义">
+          </div>
+          <div id="idiomsList" class="card-list"></div>
+        </section>
+
+        <section id="memory" class="panel">
+          <div class="panel-toolbar">
+            <div>
+              <h2>常识记忆</h2>
+              <p id="memoryScopeText">常识、金句、「历史上的今天」、颁奖辞等翻卡复习。</p>
+            </div>
+            <div class="toolbar-actions">
+              <select id="memoryStatusFilter" aria-label="记忆状态">
+                <option value="learning">待记</option>
+                <option value="all">全部</option>
+                <option value="mastered">已掌握</option>
+              </select>
+            </div>
+          </div>
+          <div id="memoryDeck" class="memory-deck"></div>
+          <div class="list-block">
+            <h2>记忆列表</h2>
+            <div id="memoryList" class="card-list"></div>
+          </div>
+        </section>
+
+        <section id="chat" class="panel">
+          <div class="panel-toolbar">
+            <div>
+              <h2>问 AI</h2>
+              <p>默认带上当天材料、题目与常识作为上下文。</p>
+            </div>
+          </div>
+          <div class="chat-panel">
+            <div id="chatMessages" class="chat-messages"></div>
+            <form id="chatForm" class="chat-form">
+              <textarea name="message" rows="3" required placeholder="例如：总结今天时政要点，或讲解这道自测题。"></textarea>
+              <button class="primary" type="submit">发送</button>
+            </form>
+          </div>
+        </section>
+
+        <section id="import" class="panel">
+          <div class="list-block digest-block">
+            <div class="panel-toolbar">
+              <div>
+                <h2>每日积累</h2>
+                <p>粘贴微信摘抄（成语 / 金句 / 常识判断），先点「分析」预览，确认后再「写入」。</p>
+              </div>
+            </div>
+            <form id="digestForm" class="digest-form">
+              <label>
+                学习日期
+                <input id="digestDate" name="doc_date" type="date" required>
+              </label>
+              <label>
+                正文摘抄（可含新闻，系统会忽略头条）
+                <textarea id="digestText" name="text" rows="12" required placeholder="成语积累：&#10;1.江郎才尽：……&#10;&#10;金句积累：&#10;适用主题：……&#10;&#10;常识判断每日一练：&#10;……"></textarea>
+              </label>
+              <label>
+                答案与解析（找老师要到后粘贴）
+                <textarea id="digestAnswer" name="answer_text" rows="8" placeholder="本题考查……故正确答案为B。"></textarea>
+              </label>
+              <div class="toolbar-actions">
+                <button id="digestPreviewButton" type="button">分析</button>
+                <button id="digestImportButton" class="primary" type="submit">写入</button>
+              </div>
+            </form>
+            <div id="digestPreview" class="digest-preview empty">分析后会在这里显示成语、金句、题目结构。</div>
+            <div id="digestMessage" class="message"></div>
+          </div>
+
           <div class="split">
             <div>
               <h2>拖拽上传 Word</h2>
@@ -68,9 +174,12 @@
               <div class="panel-toolbar">
                 <div>
                   <h2>历史文件</h2>
-                  <p>选择已有 Word 文件手动导入。</p>
+                  <p>勾选已有 Word，或一键按新规则重解析全部。</p>
                 </div>
-                <button id="importSelectedButton">导入选中</button>
+                <div class="toolbar-actions">
+                  <button id="reparseAllButton" type="button">全部重解析</button>
+                  <button id="importSelectedButton" class="primary">导入选中</button>
+                </div>
               </div>
               <div id="existingDocsList" class="check-list"></div>
             </div>
@@ -78,160 +187,6 @@
           <div class="list-block">
             <h2>导入记录</h2>
             <div id="documentsList" class="card-list"></div>
-          </div>
-        </section>
-
-        <section id="library" class="panel">
-          <div class="panel-toolbar">
-            <div>
-              <h2>资料库</h2>
-              <p id="libraryScopeText">按日期查看当天的时政材料、历史常识、常识和成语条目。</p>
-            </div>
-            <input id="librarySearch" class="search-input" placeholder="搜索标题、正文、标签">
-          </div>
-          <div class="library-grid">
-            <div>
-              <h3>时政材料</h3>
-              <div id="materialsList" class="card-list"></div>
-            </div>
-            <div>
-              <h3>常识 / 成语</h3>
-              <div id="knowledgeList" class="card-list"></div>
-            </div>
-          </div>
-        </section>
-
-        <section id="questions" class="panel">
-          <div class="panel-toolbar">
-            <div>
-              <h2>题库</h2>
-              <p id="questionScopeText">查看当天 Word 原题，也可以基于当天材料生成新选择题。</p>
-            </div>
-            <div class="toolbar-actions">
-              <select id="generateDocSelect" aria-label="选择出题文档"></select>
-              <button id="generateQuestionsButton" class="primary">生成选择题</button>
-            </div>
-          </div>
-          <div id="questionsList" class="card-list"></div>
-        </section>
-
-        <section id="shenlun" class="panel">
-          <form id="shenlunForm" class="form-grid">
-            <label>
-              题型
-              <select name="question_type">
-                <option value="归纳概括">归纳概括</option>
-                <option value="综合分析">综合分析</option>
-                <option value="提出对策">提出对策</option>
-                <option value="贯彻执行">贯彻执行</option>
-                <option value="申发论述">申发论述</option>
-              </select>
-            </label>
-            <label>
-              满分
-              <input name="max_score" type="number" min="1" max="100" value="20">
-            </label>
-            <label class="full">
-              题干
-              <textarea name="prompt" rows="3" required placeholder="粘贴申论题干"></textarea>
-            </label>
-            <label class="full">
-              材料
-              <textarea name="materials" rows="7" required placeholder="粘贴申论材料"></textarea>
-            </label>
-            <label class="full">
-              我的作答
-              <textarea name="answer" rows="7" required placeholder="粘贴你的答案"></textarea>
-            </label>
-            <button class="primary" type="submit">提交批改</button>
-          </form>
-          <div class="list-block">
-            <h2>批改记录</h2>
-            <div id="shenlunList" class="review-list"></div>
-          </div>
-        </section>
-
-        <section id="chat" class="panel">
-          <div class="chat-layout">
-            <aside class="context-panel">
-              <h2>选择上下文</h2>
-              <div id="chatContextList" class="check-list compact"></div>
-            </aside>
-            <div class="chat-panel">
-              <div id="chatMessages" class="chat-messages"></div>
-              <form id="chatForm" class="chat-form">
-                <textarea name="message" rows="3" required placeholder="例如：用我选中的材料帮我出 5 个高频考点，或者讲解这道题。"></textarea>
-                <button class="primary" type="submit">发送</button>
-              </form>
-            </div>
-          </div>
-        </section>
-
-        <section id="daily" class="panel">
-          <form id="dailyForm" class="form-grid">
-            <label>日期<input type="date" name="log_date" required></label>
-            <label>学习时长（分钟）<input type="number" name="study_minutes" min="0" step="5" value="0"></label>
-            <div class="full module-table">
-              <div class="table-head"><span>行测模块</span><span>正确</span><span>错误</span></div>
-              <div id="reasoningInputs"></div>
-            </div>
-            <label class="full">申论备注<textarea name="essay_note" rows="3"></textarea></label>
-            <label class="full">时政备注<textarea name="affairs_note" rows="3"></textarea></label>
-            <button class="primary" type="submit">保存今日打卡</button>
-          </form>
-          <div class="list-block">
-            <h2>最近打卡</h2>
-            <div id="dailyList" class="dense-list"></div>
-          </div>
-        </section>
-
-        <section id="wrong" class="panel">
-          <form id="wrongForm" class="form-grid">
-            <label>
-              模块
-              <select name="module" required>
-                <option value="言语理解">言语理解</option>
-                <option value="数量关系">数量关系</option>
-                <option value="判断推理">判断推理</option>
-                <option value="资料分析">资料分析</option>
-                <option value="常识判断">常识判断</option>
-                <option value="申论">申论</option>
-                <option value="时政">时政</option>
-              </select>
-            </label>
-            <label>题型<input name="question_type"></label>
-            <label class="full">题干<textarea name="prompt" rows="4" required></textarea></label>
-            <label>正确答案<input name="correct_answer"></label>
-            <label>我的错误<input name="my_answer"></label>
-            <label class="full">错误原因<textarea name="reason" rows="3"></textarea></label>
-            <label>标签<input name="tags" placeholder="逗号分隔"></label>
-            <label>
-              复习状态
-              <select name="review_status">
-                <option value="pending">待二刷</option>
-                <option value="reviewing">复习中</option>
-                <option value="mastered">已掌握</option>
-              </select>
-            </label>
-            <button class="primary" type="submit">加入错题本</button>
-          </form>
-          <div class="list-block">
-            <h2>错题列表</h2>
-            <div id="wrongList" class="card-list"></div>
-          </div>
-        </section>
-
-        <section id="review" class="panel">
-          <div class="review-box">
-            <div class="panel-toolbar">
-              <div>
-                <h2>AI 复盘</h2>
-                <p>基于学习记录、错题和资料库生成复盘。</p>
-              </div>
-              <button id="aiReviewButtonPanel" class="primary">生成复盘</button>
-            </div>
-            <div id="aiMessage" class="message"></div>
-            <div id="reviewList" class="review-list"></div>
           </div>
         </section>
       </section>
