@@ -229,7 +229,8 @@ server.on("error", error => {
 server.listen(PORT, "127.0.0.1", () => {
   const url = `http://127.0.0.1:${PORT}`;
   console.log(`公考学习追踪已启动: ${url}`);
-  if (process.argv.includes("--open")) openBrowser(url);
+  const desktop = process.env.STUDY_DESKTOP === "1";
+  if (!desktop && process.argv.includes("--open")) openBrowser(url);
 });
 
 async function handleApi(req, res, url) {

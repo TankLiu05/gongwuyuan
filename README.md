@@ -12,32 +12,35 @@
 
 导入时会按 Word 章节自动拆分；若解析规则更新，可在「导入」页点 **全部重解析**。
 
-不依赖 npm 安装，无账号体系，数据都在本机。
+无账号体系，数据都在本机。macOS / Windows 可用 Electron 桌面窗口（关窗即停）；也可仍用浏览器访问本地服务。
 
 ## 环境要求
 
 - [Node.js](https://nodejs.org/)（建议 22+，需支持内置 `node:sqlite`）
 - Python 3（用于解析 `.docx`）
 - DeepSeek API Key（AI 出题、对话需要；只导入浏览可不配）
+- 桌面版另需一次 `npm install`（安装 Electron）
 
 ## 目录说明
 
 ```
 study/
 ├── mac/                 # macOS 启动 / 停止
-│   ├── start.command
+│   ├── start.command    # 桌面版（Electron 窗口）
 │   └── stop.command
-├── win/                 # Windows 启动 / 停止
+├── win/                 # Windows 启动 / 停止（Electron 桌面窗）
 │   ├── start.bat
 │   ├── stop.bat
 │   ├── start.sh         # Git Bash 备用
 │   └── stop.sh
+├── electron/            # Electron 主进程（本机桌面壳）
 ├── public/              # 前端页面
 ├── scripts/
 │   ├── parse_docx.py
 │   ├── parse_daily_digest.js
 │   └── write_import_sql.js
 ├── server.js            # 本地服务
+├── package.json         # 桌面版依赖（Electron）
 ├── .env.example         # 环境变量模板
 ├── data/                # SQLite（本地，不入库）
 ├── sql/imports/         # 每次导入生成的可回放 SQL
@@ -67,14 +70,36 @@ PORT=4783
 
 也可把 `.env` 放在上级 `每日时政/` 目录，工具会一并读取。
 
+3. （桌面版）在 `study/` 下安装一次依赖：
+
+```bash
+npm install
+```
+
+双击 `mac/start.command` 或 `win/start.bat` 时若尚未安装，也会自动执行（默认用 npmmirror 拉 Electron 二进制）。
+
+若手动 `npm install` 超时，可：
+
+```bash
+ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ npm install
+```
+
 ## 启动
 
-### macOS
+### macOS（桌面版）
 
 双击 `mac/start.command`  
+或在 `study/` 目录执行：
+
+```bash
+npm start
+```
+
+会打开独立窗口（无浏览器地址栏）。**关掉窗口即停止服务。**
+
 （若提示无法打开：系统设置 → 隐私与安全性 → 仍要打开；或在终端执行 `chmod +x mac/*.command`）
 
-### Windows
+### Windows（桌面版）
 
 双击 `win/start.bat`  
 或在 Git Bash 中：
@@ -83,7 +108,16 @@ PORT=4783
 bash win/start.sh
 ```
 
-启动后会打开浏览器；也可手动访问：
+同样打开 Electron 窗口；**点右上角叉号关窗即停服务。**  
+（首次需已安装 Node.js / npm；缺 Electron 时会自动 `npm install`。）
+
+### 浏览器回退（任意系统）
+
+```bash
+node server.js --open
+```
+
+或 `npm run server`。手动访问：
 
 ```
 http://127.0.0.1:4783

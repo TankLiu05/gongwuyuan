@@ -1,0 +1,14 @@
+{
+  "name": "gongkao-study",
+  "version": "1.0.0",
+  "private": true,
+  "description": "公考学习追踪 — 本机桌面版",
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "electron .",
+    "server": "node server.js --open"
+  },
+  "devDependencies": {
+    "electron": "^37.2.0"
+  }
+}

@@ -3,6 +3,7 @@ data/
 exports/
 study/data/
 study/exports/
+node_modules/
 __pycache__/
 .DS_Store
 .idea/
