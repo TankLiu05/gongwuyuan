@@ -30,6 +30,7 @@ const env = {
   ...loadEnv(path.join(ROOT, ".env"))
 };
 const PORT = Number(env.PORT || process.env.PORT || 4783);
+const HOST = String(env.HOST || process.env.HOST || "127.0.0.1").trim() || "127.0.0.1";
 
 const db = new DatabaseSync(DB_PATH);
 db.exec(`
@@ -226,9 +227,13 @@ server.on("error", error => {
   process.exit(1);
 });
 
-server.listen(PORT, "127.0.0.1", () => {
-  const url = `http://127.0.0.1:${PORT}`;
+server.listen(PORT, HOST, () => {
+  const displayHost = HOST === "0.0.0.0" ? "127.0.0.1" : HOST;
+  const url = `http://${displayHost}:${PORT}`;
   console.log(`公考学习追踪已启动: ${url}`);
+  if (HOST === "0.0.0.0") {
+    console.log(`（已监听 0.0.0.0:${PORT}，局域网/公网可通过本机 IP 访问）`);
+  }
   const desktop = process.env.STUDY_DESKTOP === "1";
   if (!desktop && process.argv.includes("--open")) openBrowser(url);
 });

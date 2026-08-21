@@ -12,7 +12,7 @@
 
 导入时会按 Word 章节自动拆分；若解析规则更新，可在「导入」页点 **全部重解析**。
 
-无账号体系，数据都在本机。macOS / Windows 可用 Electron 桌面窗口（关窗即停）；也可仍用浏览器访问本地服务。
+无账号体系，数据都在本机。macOS / Windows 可用 Electron 桌面窗口（关窗即停）；Linux 服务器用网页端后台运行；也可本机浏览器访问。
 
 ## 环境要求
 
@@ -33,13 +33,16 @@ study/
 │   ├── stop.bat
 │   ├── start.sh         # Git Bash 备用
 │   └── stop.sh
+├── linux/               # Linux 服务器网页端启动 / 停止
+│   ├── start.sh
+│   └── stop.sh
 ├── electron/            # Electron 主进程（本机桌面壳）
 ├── public/              # 前端页面
 ├── scripts/
 │   ├── parse_docx.py
 │   ├── parse_daily_digest.js
 │   └── write_import_sql.js
-├── server.js            # 本地服务
+├── server.js            # 本地 / 服务器服务
 ├── package.json         # 桌面版依赖（Electron）
 ├── .env.example         # 环境变量模板
 ├── data/                # SQLite（本地，不入库）
@@ -66,6 +69,8 @@ DEEPSEEK_API_KEY=你的key
 DEEPSEEK_BASE_URL=https://api.deepseek.com
 DEEPSEEK_MODEL=deepseek-v4-flash
 PORT=4783
+# 服务器网页端对外访问时取消下一行注释，或依赖 linux/start.sh 默认 HOST=0.0.0.0
+# HOST=0.0.0.0
 ```
 
 也可把 `.env` 放在上级 `每日时政/` 目录，工具会一并读取。
@@ -111,7 +116,28 @@ bash win/start.sh
 同样打开 Electron 窗口；**点右上角叉号关窗即停服务。**  
 （首次需已安装 Node.js / npm；缺 Electron 时会自动 `npm install`。）
 
-### 浏览器回退（任意系统）
+### Linux 服务器（网页端）
+
+不依赖 Electron。在服务器 `study/` 目录：
+
+```bash
+bash linux/start.sh
+```
+
+- 默认 `HOST=0.0.0.0`、`PORT=4783`，后台 `nohup` 运行  
+- 日志：`data/server.log`，PID：`data/server.pid`  
+- 浏览器访问：`http://服务器IP:4783`  
+- 停止：`bash linux/stop.sh`
+
+自定义端口 / 仅本机：
+
+```bash
+PORT=8080 HOST=127.0.0.1 bash linux/start.sh
+```
+
+需放行防火墙 / 安全组对应端口。服务器同样需要 Node.js 22+、Python3（导入 Word）、以及 `.env`。
+
+### 浏览器回退（任意系统本机）
 
 ```bash
 node server.js --open
@@ -125,8 +151,9 @@ http://127.0.0.1:4783
 
 ## 停止
 
-- macOS：双击 `mac/stop.command`
-- Windows：双击 `win/stop.bat`（或 `bash win/stop.sh`）
+- macOS：双击 `mac/stop.command`（或关 Electron 窗）
+- Windows：双击 `win/stop.bat`（或关 Electron 窗 / `bash win/stop.sh`）
+- Linux：`bash linux/stop.sh`
 
 ## 怎么用
 
