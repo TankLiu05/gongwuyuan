@@ -33,9 +33,10 @@ study/
 │   ├── stop.bat
 │   ├── start.sh         # Git Bash 备用
 │   └── stop.sh
-├── linux/               # Linux 服务器网页端启动 / 停止
-│   ├── start.sh
-│   └── stop.sh
+├── linux/               # Linux 服务器网页端
+│   ├── start.sh         # 回放 SQL 后后台启动
+│   ├── stop.sh
+│   └── apply-sql.sh     # 仅回放 sql/imports → SQLite
 ├── electron/            # Electron 主进程（本机桌面壳）
 ├── public/              # 前端页面
 ├── scripts/
@@ -118,16 +119,35 @@ bash win/start.sh
 
 ### Linux 服务器（网页端）
 
-不依赖 Electron。在服务器 `study/` 目录：
+不依赖 Electron。在服务器 `study/`（或 `/data/gongwuyuan`）目录：
 
 ```bash
 bash linux/start.sh
 ```
 
 - 默认 `HOST=0.0.0.0`、`PORT=4783`，后台 `nohup` 运行  
+- **启动前自动回放** `sql/imports/*.sql`，让 SQLite 与仓库 SQL 一致  
 - 日志：`data/server.log`，PID：`data/server.pid`  
-- 浏览器访问：`http://服务器IP:4783`  
+- 浏览器访问：`http://服务器IP:4783`（若安全组未放行 4783，可用 `PORT=80 bash linux/start.sh`）  
 - 停止：`bash linux/stop.sh`
+
+仅同步 SQL、不启服务：
+
+```bash
+bash linux/apply-sql.sh
+```
+
+拉取新提交后若服务已在跑，需重启才会灌库：
+
+```bash
+bash linux/stop.sh && bash linux/start.sh
+```
+
+跳过 SQL 回放（只要起服务）：
+
+```bash
+APPLY_SQL=0 bash linux/start.sh
+```
 
 自定义端口 / 仅本机：
 

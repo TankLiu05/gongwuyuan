@@ -209,6 +209,11 @@ db.exec(`
 
 scanCurrentAffairsDocs();
 
+if (process.argv.includes("--init-db-only")) {
+  console.log("数据库表结构已就绪");
+  process.exit(0);
+}
+
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host}`);

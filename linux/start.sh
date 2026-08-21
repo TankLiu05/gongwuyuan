@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Linux 服务器网页端启动（后台运行，浏览器访问）
+# 启动前会回放 sql/imports/*.sql，保证库与仓库 SQL 一致
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -8,6 +9,7 @@ PORT="${PORT:-4783}"
 HOST="${HOST:-0.0.0.0}"
 PID_FILE="data/server.pid"
 LOG_FILE="data/server.log"
+APPLY_SQL="${APPLY_SQL:-1}"
 
 if ! command -v node >/dev/null 2>&1; then
   echo "未找到 Node.js，请先安装（建议 22+）并确保 node 在 PATH 中。"
@@ -20,7 +22,7 @@ if [ -f "$PID_FILE" ]; then
   OLD_PID="$(cat "$PID_FILE" 2>/dev/null || true)"
   if [ -n "${OLD_PID:-}" ] && kill -0 "$OLD_PID" 2>/dev/null; then
     echo "已在运行（PID $OLD_PID）。访问：http://服务器IP:$PORT"
-    echo "如需重启，先执行：bash linux/stop.sh"
+    echo "如需同步最新 SQL：bash linux/stop.sh && bash linux/start.sh"
     exit 0
   fi
   rm -f "$PID_FILE"
@@ -37,6 +39,13 @@ elif command -v lsof >/dev/null 2>&1; then
     echo "端口 $PORT 已被占用，请先 bash linux/stop.sh 或更换 PORT。"
     exit 1
   fi
+fi
+
+if [ "$APPLY_SQL" = "1" ]; then
+  echo "初始化数据库表结构…"
+  node server.js --init-db-only
+  echo "回放 sql/imports/*.sql …"
+  node scripts/apply_import_sql.js
 fi
 
 echo "正在后台启动公考学习追踪（网页端）…"
